@@ -1,14 +1,12 @@
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const Groq = require("groq-sdk");
 const Review = require("../models/Review");
 const User = require("../models/User");
 
-if (!process.env.GEMINI_API_KEY) {
-  console.error("❌ FATAL: GEMINI_API_KEY is missing from .env");
+if (!process.env.GROQ_API_KEY) {
+  console.error("❌ FATAL: GROQ_API_KEY is missing from .env");
 }
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const buildPrompt = (code, language) => `
 You are an expert code reviewer. Analyze the following ${language} code.
@@ -61,33 +59,21 @@ const analyzeCode = async (req, res) => {
     if (code.length > 10000)
       return res.status(400).json({ message: "Code too long. Max 10,000 characters." });
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
     const prompt = buildPrompt(code, language);
 
-    // ── Retry logic for 429 rate limiting ──────────────────────────────────
-    let result;
-    let attempts = 0;
-    while (attempts < 3) {
-      try {
-        result = await model.generateContent(prompt);
-        break;
-      } catch (err) {
-        if ((err.status === 429 || err.message?.includes("RESOURCE_EXHAUSTED")) && attempts < 2) {
-          attempts++;
-          const waitSec = attempts * 5;
-          console.log(`⚠️  Rate limited by Gemini. Retrying in ${waitSec}s... (attempt ${attempts}/3)`);
-          await sleep(waitSec * 1000);
-        } else {
-          throw err;
-        }
-      }
-    }
+    // ── Call Groq API ──────────────────────────────────────────────────────
+    const chatCompletion = await groq.chat.completions.create({
+      messages: [{ role: "user", content: prompt }],
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.3,
+      max_tokens: 2048,
+    });
 
-    const rawText = result.response.text();
+    const rawText = chatCompletion.choices[0]?.message?.content || "";
 
-    console.log("=== RAW GEMINI RESPONSE ===");
+    console.log("=== RAW GROQ RESPONSE ===");
     console.log(rawText.substring(0, 500));
-    console.log("===========================");
+    console.log("=========================");
 
     // ── Parse AI response ──────────────────────────────────────────────────
     let parsed;
@@ -139,19 +125,15 @@ const analyzeCode = async (req, res) => {
     console.error("=== REVIEW ERROR ===");
     console.error("Message:", error.message);
     console.error("Status:", error.status);
-    console.error("Stack:", error.stack?.split("\n")[1]);
 
-    if (!process.env.GEMINI_API_KEY || error.message?.includes("API_KEY")) {
-      return res.status(500).json({ message: "❌ GEMINI_API_KEY is missing or invalid in your .env file." });
+    if (!process.env.GROQ_API_KEY || error.message?.includes("api_key") || error.message?.includes("Authentication")) {
+      return res.status(500).json({ message: "❌ GROQ_API_KEY is missing or invalid in your .env file." });
     }
-    if (error.status === 429 || error.message?.includes("quota") || error.message?.includes("RESOURCE_EXHAUSTED")) {
-      return res.status(429).json({ message: "⚠️ Gemini rate limit hit after 3 retries. Please wait 1 minute and try again." });
-    }
-    if (error.status === 404 || error.message?.includes("not found") || error.message?.includes("MODEL")) {
-      return res.status(500).json({ message: "❌ Gemini model not found. Check model name in reviewController.js." });
+    if (error.status === 429 || error.message?.includes("rate_limit")) {
+      return res.status(429).json({ message: "⚠️ Groq rate limit hit. Please wait a moment and try again." });
     }
     if (error.message?.includes("fetch") || error.message?.includes("ECONNREFUSED")) {
-      return res.status(500).json({ message: "❌ Could not reach Gemini API. Check your internet connection." });
+      return res.status(500).json({ message: "❌ Could not reach Groq API. Check your internet connection." });
     }
 
     res.status(500).json({ message: "AI review failed: " + error.message });

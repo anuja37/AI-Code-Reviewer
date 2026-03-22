@@ -7,7 +7,7 @@ const rateLimit = require("express-rate-limit");
 dotenv.config();
 
 // ── Temporary debug — remove after fixing the 500 error ──
-console.log("GEMINI_API_KEY loaded:", !!process.env.GEMINI_API_KEY);
+console.log("GROQ_API_KEY loaded:  ", !!process.env.GROQ_API_KEY);
 console.log("MONGO_URI loaded:     ", !!process.env.MONGO_URI);
 console.log("CLIENT_URL:           ", process.env.CLIENT_URL);
 
